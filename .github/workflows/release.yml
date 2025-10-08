@@ -1,0 +1,281 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  security-check:
+    name: Pre-Release Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd backend && npm ci
+          cd ../frontend && npm ci
+
+      - name: Security audit
+        run: |
+          npm audit --audit-level high
+          cd backend && npm audit --audit-level high
+          cd ../frontend && npm audit --audit-level high
+
+      - name: Run tests
+        run: npm run test
+
+  build-release:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: security-check
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd backend && npm ci
+          cd ../frontend && npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Install pkg
+        run: npm install -g pkg
+
+      - name: Create Windows executable
+        run: |
+          mkdir -p dist
+          cd backend
+          pkg package.json --targets node18-win-x64 --output ../dist/SafeSteamTools.exe
+
+      - name: Install security tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam
+
+      - name: Malware scan
+        run: |
+          clamscan --infected dist/SafeSteamTools.exe
+          clamscan --recursive --infected dist/
+
+      - name: VirusTotal scan
+        uses: crazy-max/ghaction-virustotal@v4
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: |
+            dist/SafeSteamTools.exe
+        continue-on-error: true
+
+      - name: Generate security report
+        run: |
+          chmod +x scripts/generate-security-report.sh
+          ./scripts/generate-security-report.sh > SECURITY_REPORT.md
+
+      - name: Package release
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          mkdir -p release
+          
+          # Copy files
+          cp dist/SafeSteamTools.exe release/
+          cp README.md LICENSE .env.example release/
+          cp SECURITY_REPORT.md release/
+          
+          # Create installation script
+          cat > release/INSTALL.bat << 'EOF'
+          @echo off
+          echo SafeSteamTools Setup
+          echo ===================
+          echo.
+          echo 1. Get Steam API key: https://steamcommunity.com/dev/apikey
+          echo 2. Copy .env.example to .env
+          echo 3. Edit .env and add your Steam API key
+          echo 4. Run SafeSteamTools.exe
+          echo.
+          if not exist .env copy .env.example .env
+          echo Setup complete! Edit .env with your Steam API key, then run SafeSteamTools.exe
+          pause
+          EOF
+          
+          # Create ZIP archive
+          cd release
+          zip -r SafeSteamTools-v${VERSION}-windows.zip *
+          
+          # Generate checksums
+          sha256sum * > SHA256SUMS.txt
+          
+          # Create source tarball
+          cd ..
+          tar -czf release/SafeSteamTools-v${VERSION}-source.tar.gz \
+            --exclude=node_modules \
+            --exclude=dist \
+            --exclude=release \
+            --exclude=.git \
+            .
+          
+          cd release
+          sha256sum SafeSteamTools-v${VERSION}-source.tar.gz >> SHA256SUMS.txt
+
+      - name: GPG sign files
+        if: github.event_name == 'push'
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          cd release
+          for file in *.zip *.tar.gz; do
+            gpg --batch --yes --detach-sign --armor "$file"
+          done
+        continue-on-error: true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-artifacts
+          path: |
+            release/
+            SECURITY_REPORT.md
+          retention-days: 30
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-release
+    if: success()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: release-artifacts
+          path: .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.build-release.outputs.version }}
+          name: SafeSteamTools v${{ needs.build-release.outputs.version }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          draft: false
+          generate_release_notes: true
+          body: |
+            # SafeSteamTools v${{ needs.build-release.outputs.version }} 🛡️
+            
+            **Legal, malware-free Steam data viewer**
+            
+            ## 🚀 Quick Install (Windows)
+            
+            1. Download `SafeSteamTools-v${{ needs.build-release.outputs.version }}-windows.zip`
+            2. Extract the ZIP file
+            3. Get your Steam API key: https://steamcommunity.com/dev/apikey
+            4. Copy `.env.example` to `.env` and add your API key
+            5. Run `SafeSteamTools.exe`
+            
+            ## 🔒 Security Verification
+            
+            **All releases are scanned for malware before publication.**
+            
+            Verify your download:
+            ```bash
+            # Check SHA256 (compare with SHA256SUMS.txt)
+            sha256sum SafeSteamTools.exe
+            
+            # Verify GPG signature (if available)
+            gpg --verify SafeSteamTools-v${{ needs.build-release.outputs.version }}-windows.zip.asc
+            
+            # Scan with your antivirus
+            # Always recommended before running any executable
+            ```
+            
+            ## 🎯 Features
+            
+            - View public Steam profiles
+            - Browse owned games and playtime
+            - Check achievements (public only)
+            - View inventory items with price estimates
+            - Export profile data as JSON
+            
+            ## ⚠️ Important Legal Notice
+            
+            SafeSteamTools:
+            - ✅ Uses ONLY official Steam Web APIs
+            - ✅ Requires NO Steam passwords
+            - ✅ Accesses only PUBLIC data
+            - ❌ Does NOT unlock paid content
+            - ❌ Does NOT circumvent DRM
+            - ❌ Is NOT affiliated with Valve
+            
+            ## 🔗 Links
+            
+            - **Documentation**: [README.md](https://github.com/KYOOOOP/SafeSteamTools#readme)
+            - **Security Report**: See attached `SECURITY_REPORT.md`
+            - **Source Code**: [GitHub Repository](https://github.com/KYOOOOP/SafeSteamTools)
+            - **Issues**: [Report Problems](https://github.com/KYOOOOP/SafeSteamTools/issues)
+            
+            ---
+            
+            **This release has been automatically scanned for vulnerabilities and malware.**
+            
+            Generated by SafeSteamTools Release System 🏠
+          files: |
+            release/SafeSteamTools-v${{ needs.build-release.outputs.version }}-windows.zip
+            release/SafeSteamTools-v${{ needs.build-release.outputs.version }}-source.tar.gz
+            release/SHA256SUMS.txt
+            release/*.asc
+            SECURITY_REPORT.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update README with latest release
+        run: |
+          VERSION=${{ needs.build-release.outputs.version }}
+          sed -i "s/download\/v[0-9.]*/download\/v${VERSION}/g" README.md
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md
+          git commit -m "Update README with release v${VERSION}" || exit 0
+          git push
+        continue-on-error: true

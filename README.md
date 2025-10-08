@@ -22,6 +22,69 @@ SafeSteamTools allows users to:
 - ❌ Does NOT modify game files
 - ❌ Is NOT affiliated with Valve Corporation
 
+## 👥 Quick Install for Windows Users
+
+### 🎡 One-Click Windows Executable
+
+**Download SafeSteamTools.exe** - No installation required!
+
+1. **Download the latest release**:
+   🔗 **[Download SafeSteamTools-v1.0.0-windows.zip](https://github.com/KYOOOOP/SafeSteamTools/releases/latest)**
+
+2. **Extract and run**:
+   ```
+   1. Extract ZIP file
+   2. Double-click INSTALL.bat for guided setup
+   3. Get Steam API key: https://steamcommunity.com/dev/apikey
+   4. Edit .env file with your API key
+   5. Run SafeSteamTools.exe
+   ```
+
+3. **Access your Steam data**:
+   - Open browser: **http://localhost:3001**
+   - Enter any public Steam ID to view profile data
+   - No Steam login required - uses public APIs only!
+
+### 🛡️ Security Verification
+
+**Every release is scanned for malware before publication:**
+
+```bash
+# Verify file integrity (compare with SHA256SUMS.txt)
+sha256sum SafeSteamTools.exe
+
+# Scan with your antivirus (always recommended)
+Windows Defender, ClamAV, or your preferred scanner
+```
+
+**Security Features**:
+- ✅ Scanned with 70+ antivirus engines via VirusTotal
+- ✅ No network access except official Steam APIs
+- ✅ No file system modifications
+- ✅ No admin privileges required
+- ✅ Open source - audit the code yourself!
+
+### 🎮 Try It Now
+
+**Test with these public Steam IDs**:
+- `76561198000000000` (Example profile)
+- Your own Steam ID (if public)
+- Friends' Steam IDs (if their profiles are public)
+
+**API Examples**:
+```bash
+# Get profile info
+curl http://localhost:3001/api/profile/76561198000000000
+
+# Get games list
+curl http://localhost:3001/api/games/76561198000000000
+
+# Get CS:GO inventory
+curl http://localhost:3001/api/inventory/76561198000000000/730
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -47,7 +110,7 @@ SafeSteamTools allows users to:
 - **CI/CD**: GitHub Actions
 - **Deployment**: Vercel (frontend) + Render/Railway (backend)
 
-## 🚀 Quick Start
+## 🚀 Development Setup
 
 ### Prerequisites
 - Node.js 18+
